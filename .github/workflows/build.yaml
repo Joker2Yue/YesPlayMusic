@@ -1,15 +1,9 @@
-name: Release
-
-env:
-  YARN_INSTALL_NOPT: yarn add --ignore-platform --ignore-optional
+name: Build/Release
 
 on:
   push:
     branches:
-      - master
-    tags:
-      - v*
-  workflow_dispatch:
+      - react
 
 jobs:
   release:
@@ -17,100 +11,80 @@ jobs:
 
     strategy:
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-22.04]
+        os: [macos-latest, windows-latest, ubuntu-18.04]
 
     steps:
       - name: Check out Git repository
         uses: actions/checkout@v3
         with:
-          submodules: "recursive"
+          submodules: 'recursive'
 
-      - name: Install Node.js, NPM and Yarn
-        uses: actions/setup-node@v3
+      - uses: pnpm/action-setup@v2.0.1
+        with:
+          version: 6.29.0
+
+      - name: Install Node.js 16
+        uses: actions/setup-node@v2
         with:
           node-version: 16
-          cache: 'yarn'
+          cache: 'pnpm'
 
-      - name: Install RPM & Pacman (on Ubuntu)
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile false
+
+      - name: Build sqlite3 binaries
+        run: node ./scripts/build.sqlite3.js
+
+      - name: Install RPM & Pacman (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update &&
           sudo apt-get install --no-install-recommends -y rpm &&
-          sudo apt-get install --no-install-recommends -y libarchive-tools &&
+          sudo apt-get install --no-install-recommends -y bsdtar &&
           sudo apt-get install --no-install-recommends -y libopenjp2-tools
 
-      - name: Install Snapcraft (on Ubuntu)
+      - name: Install Snapcraft (Linux)
         uses: samuelmeuli/action-snapcraft@v1
         if: startsWith(matrix.os, 'ubuntu')
-        with:
-          snapcraft_token: ${{ secrets.snapcraft_token }}
+        # with:
+        #   Disable since the Snapcraft token is currently not working
+        #   snapcraft_token: ${{ secrets.snapcraft_token }}
 
-      - id: get_unm_version
-        name: Get the installed UNM version
-        run: |
-          yarn --ignore-optional
-          unm_version=$(node -e "console.log(require('./node_modules/@unblockneteasemusic/rust-napi/package.json').version)")
-          echo "::set-output name=unmver::${unm_version}"
-        shell: bash
-
-      - name: Install UNM dependencies for Windows
-        if: runner.os == 'Windows'
-        run: |
-          ${{ env.YARN_INSTALL_NOPT }} \
-            @unblockneteasemusic/rust-napi-win32-x64-msvc@${{steps.get_unm_version.outputs.unmver}}
-        shell: bash
-
-      - name: Install UNM dependencies for macOS
-        if: runner.os == 'macOS'
-        run: |
-          ${{ env.YARN_INSTALL_NOPT }} \
-            @unblockneteasemusic/rust-napi-darwin-x64@${{steps.get_unm_version.outputs.unmver}} \
-            @unblockneteasemusic/rust-napi-darwin-arm64@${{steps.get_unm_version.outputs.unmver}} \
-            dmg-license
-        shell: bash
-
-      - name: Install UNM dependencies for Linux
-        if: runner.os == 'Linux'
-        run: |
-          ${{ env.YARN_INSTALL_NOPT }} \
-            @unblockneteasemusic/rust-napi-linux-x64-gnu@${{steps.get_unm_version.outputs.unmver}} \
-            @unblockneteasemusic/rust-napi-linux-arm64-gnu@${{steps.get_unm_version.outputs.unmver}} \
-            @unblockneteasemusic/rust-napi-linux-arm-gnueabihf@${{steps.get_unm_version.outputs.unmver}}
-        shell: bash
-
-      - name: Build/release Electron app
-        uses: samuelmeuli/action-electron-builder@v1.6.0
+      - name: Build/Release Electron app
+        uses: njzydark/action-electron-builder-pnpm@v1.1.0-pnpm
         env:
-          VUE_APP_NETEASE_API_URL: /api
-          VUE_APP_ELECTRON_API_URL: /api
-          VUE_APP_ELECTRON_API_URL_DEV: http://127.0.0.1:10754
-          VUE_APP_LASTFM_API_KEY: 09c55292403d961aa517ff7f5e8a3d9c
-          VUE_APP_LASTFM_API_SHARED_SECRET: 307c9fda32b3904e53654baff215cb67
+          ELECTRON_WEB_SERVER_PORT: 42710
+          VITE_APP_NETEASE_API_URL: /netease
+          VITE_APP_LASTFM_API_KEY: 09c55292403d961aa517ff7f5e8a3d9c
+          VITE_APP_LASTFM_API_SHARED_SECRET: 307c9fda32b3904e53654baff215cb67
         with:
           # GitHub token, automatically provided to the action
           # (No need to define this secret in the repo settings)
           github_token: ${{ secrets.github_token }}
-
           # If the commit is tagged with a version (e.g. "v1.0.0"),
           # release the app after building
           release: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          args: --config .electron-builder.config.js
+          skip_package_manager_install: true
+          package_manager: pnpm
 
-          use_vue_cli: true
-
-      - uses: actions/upload-artifact@v3
+      - name: Upload Artifact (macOS)
+        uses: actions/upload-artifact@v3
         with:
-          name: YesPlayMusic-mac
-          path: dist_electron/*-universal.dmg
+          name: R3PLAY-mac
+          path: release/*-universal.dmg
           if-no-files-found: ignore
 
-      - uses: actions/upload-artifact@v3
+      - name: Upload Artifact (Windows)
+        uses: actions/upload-artifact@v3
         with:
-          name: YesPlayMusic-win
-          path: dist_electron/*Setup*.exe
+          name: R3PLAY-win
+          path: release/*x64-Setup.exe
           if-no-files-found: ignore
 
-      - uses: actions/upload-artifact@v3
+      - name: Upload Artifact (Linux)
+        uses: actions/upload-artifact@v3
         with:
-          name: YesPlayMusic-linux
-          path: dist_electron/*.AppImage
+          name: R3PLAY-linux
+          path: release/*.AppImage
           if-no-files-found: ignore
